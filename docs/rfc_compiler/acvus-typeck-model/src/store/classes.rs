@@ -31,15 +31,13 @@ pub struct Classes<C>
 where
     C: ConstraintOf,
 {
-    /// Open to the rest of the store for [`Classes::verify`] and for copying a
-    /// template.
+    /// Open to the rest of the store for [`Classes::verify`].
     pub(super) slots: Arena<ClassId, Slot>,
     /// The constraints not finished, and what each has to do with which class.
     /// It is told of every union and every part named, here and nowhere else.
     ledger: Ledger<C>,
     /// Each undecided class with the parts named on it. It is told of every
-    /// part named, every class written whole and every union, here and where a
-    /// template is copied.
+    /// part named and every union, here and nowhere else.
     pub(super) owners: Owners<ClassId>,
 }
 

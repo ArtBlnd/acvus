@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{BrandId, ClosureId, Name};
+use super::{ClosureId, Name};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Mutability {
@@ -80,9 +80,6 @@ pub enum Shape<P> {
     Struct(Name, Vec<P>),
     /// `N⟨T̄, ι⟩`. Parts: each argument, and the brand type.
     Extern(Name, Vec<P>, P),
-    /// A brand, by its name: what stands at the brand of an [`Shape::Extern`]
-    /// once it is made. Two of two names are two heads, and do not join.
-    Brand(BrandId),
     Scalar(Scalar),
     String,
     Str,
@@ -142,7 +139,6 @@ impl<P> Shape<P> {
             | Shape::String
             | Shape::Str
             | Shape::Unit
-            | Shape::Brand(_)
             | Shape::Never => Vec::new(),
         }
     }
@@ -204,7 +200,6 @@ impl<P> Shape<P> {
             Shape::String => Shape::String,
             Shape::Str => Shape::Str,
             Shape::Unit => Shape::Unit,
-            Shape::Brand(brand) => Shape::Brand(*brand),
             Shape::Never => Shape::Never,
         }
     }
@@ -219,16 +214,6 @@ impl<P> Shape<P> {
             let key = keys.next().expect("`map` visits the parts `places` names, in its order");
             f(&key, part)
         })
-    }
-
-    /// As [`Shape::map`], where `f` may fail: the first failure, and no shape.
-    pub fn try_map<Q, E, F>(&self, f: F) -> Result<Shape<Q>, E>
-    where
-        F: FnMut(&P) -> Result<Q, E>,
-    {
-        let parts: Vec<Q> = self.places().into_iter().map(|(_, part)| part).map(f).collect::<Result<_, _>>()?;
-        let mut parts = parts.into_iter();
-        Ok(self.map(|_| parts.next().expect("`map` visits the parts `places` names, in its order")))
     }
 
     /// The constructor and members alone. Two shapes are of one layer where
@@ -353,8 +338,8 @@ mod tests {
         assert_eq!(SHARED.join(SHARED), SHARED);
     }
 
-    /// `map_keyed` and `try_map` pair what `places` gives with what `map` visits
-    /// by their order, which is one order for every shape of several parts.
+    /// `map_keyed` pairs what `places` gives with what `map` visits by their
+    /// order, which is one order for every shape of several parts.
     #[test]
     fn map_and_places_visit_the_parts_of_a_shape_in_one_order() {
         let named = |names: &[&str]| names.iter().zip(0u32..).map(|(name, part)| (Name::new(*name), part)).collect::<BTreeMap<_, _>>();
@@ -370,8 +355,6 @@ mod tests {
         ];
         for shape in shapes {
             let keyed = shape.map_keyed(|key, part| (key.clone(), *part));
-            assert_eq!(shape.try_map(|part| Ok::<_, ()>(*part)), Ok(shape.clone()));
-            assert_eq!(shape.try_map(|part| if *part == 1 { Err(*part) } else { Ok(*part) }), Err(1));
             let places: Vec<(PartKey, u32)> = shape.places().into_iter().map(|(key, part)| (key, *part)).collect();
             assert_eq!(keyed.places().into_iter().map(|(_, pair)| pair.clone()).collect::<Vec<_>>(), places);
         }

@@ -54,7 +54,6 @@ pub(super) fn look(view: &View<'_>, lower: ClassId, upper: ClassId) -> Told {
         | Shape::Fn(..)
         | Shape::FnValue(_)
         | Shape::Object(_)
-        | Shape::Brand(_)
         | Shape::Scalar(_)
         | Shape::String
         | Shape::Str

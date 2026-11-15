@@ -14,7 +14,7 @@ pub enum Cause {
     /// compared.
     Mismatch,
     /// An argument does not go to the type it is passed to: the language gives
-    /// nothing, and not exactly one way through declared functions goes.
+    /// nothing between the two.
     NoChange,
     /// The domains registered on a class admit no head, or not the head it has.
     EmptyDomain,

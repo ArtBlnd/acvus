@@ -14,22 +14,9 @@
 //! | `pass a to p;` | `a` is passed to `p` |
 //! | `exit e to w;` | the exit of a `?`: `e` is what it exits with, `w` the error |
 //! | `declare p = Option<t>;` | `p` is a class a declaration writes, and `t` a hole of it |
-//! | `row as_slice<T>: &Vec<T> -> &[T];`, `row push<T>: &mut Vec<T>, T -> ();` | a declared function, of one parameter or of several |
-//! | `f <- fn [a] (x) -> r { r <- x; };` | a closure of the lambda, over `a`, is named, and its function value enters `f` |
-//! | `f <- fn (s: &Point<a, b>, x) -> r { .. };` | a parameter that writes a type: what is passed is passed to it as to a declared type |
-//! | `row map<T, U>: Option<T>, Fn(T) -> U -> Option<U>;` | a function type: what a function value is passed to |
-//! | `row open<B>: u8 -> Handle<; B>;`, `a <- Handle<u8; b>;` | a type that has a brand, written last: in a row a hole, in a program a class |
+//! | `a <- Handle<u8; b>;` | a type that has a brand: the class that stands there is written last |
 //! | `struct Point {x, y};` | a struct: `Point<T, U>` has the field `x` of the type `T` and `y` of `U` |
-//! | `module Point [x, y] { new <- fn (a, b) -> r { .. }; };` | a struct and its functions: a lambda that takes nothing and gives them |
-//! | `call Point::new(u, v) to p;` | the module is used, and that function of it called |
-//! | `call f(u, v) to w;` | `f` is passed to the function type of those arguments and the result `w` |
-//! | `call x::m(u) to w;` | the function of the name `m` that takes `x` as its receiver is called |
 //! | `first: pass a to p;` | the statement's items are found by the label `first` |
-//!
-//! In the body of a lambda a name is a class of the lambda: one it captures, a
-//! parameter, its result, or a class of its own from where the body first writes
-//! it. The body is written in a scope of its own, within the scope the lambda
-//! is written in, by the statements a program is written by.
 //!
 //! A word that begins with a small letter is a class, a field or a label, and one
 //! that begins with a capital is a type or a variant. [`ast`] is the program,

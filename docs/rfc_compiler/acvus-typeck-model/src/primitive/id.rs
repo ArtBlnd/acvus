@@ -36,13 +36,8 @@ id! {
     ClassId,
     /// What recorded something: a place in the text, or solving itself.
     ItemId,
-    /// A body of the store, with the classes of its parameters and its result.
+    /// A lambda together with its captures.
     ClosureId,
-    /// A name a function is called by.
-    NameId,
-    /// A brand: what a call of a function that makes one made, unlike what any
-    /// other call made.
-    BrandId,
     /// The text of a body or a lambda, or one iteration of a loop.
     ScopeId,
 }

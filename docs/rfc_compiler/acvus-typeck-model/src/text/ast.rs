@@ -35,9 +35,9 @@ pub enum Assertion {
     /// by the cause names are those of the statements labelled so.
     Names { cause: Cause, labels: BTreeSet<String> },
     /// `assert first takes Deref, Reborrow;`: the adjustments the constraint of
-    /// the statement labelled so takes, in their order. A declared function
-    /// called is written by its name. `assert first at r.x takes Deref;`: those
-    /// the projection that names `r.x` in that statement takes.
+    /// the statement labelled so takes, in their order. `assert first at r.x
+    /// takes Deref;`: those the projection that names `r.x` in that statement
+    /// takes.
     Takes {
         label: String,
         at: Option<Path>,
@@ -63,76 +63,9 @@ pub enum Op {
     Exit { exits_with: Path, error: Path },
     /// `declare name = ty;`: `name` is a class a declaration writes.
     Declare { name: String, ty: Type },
-    /// `row name<holes>: parameters -> result;`: a declared function.
-    Row {
-        name: String,
-        holes: Vec<String>,
-        parameters: Vec<Type>,
-        result: Type,
-    },
     /// `struct Name { fields };`: a struct, whose type `Name<T, U>` has one type
     /// parameter for each field, in their order.
     Struct { name: String, fields: Vec<String> },
-    /// `upper <- fn [captures] (parameters) -> result { body };`: the function
-    /// value of a closure of the lambda enters `upper`.
-    Define { upper: Path, lambda: Lambda },
-    /// `call callee(arguments) to result;`: `callee` is passed to the function
-    /// type of those arguments and that result.
-    Call {
-        callee: Path,
-        arguments: Vec<Path>,
-        result: Path,
-    },
-    /// `module Name [fields] { body };`: a struct of that name and those fields,
-    /// and the functions of it. The body is the body of a lambda that takes
-    /// nothing: a field is a class of it, and each lambda a statement of the body
-    /// assigns to a name is a function of the module, which captures the fields
-    /// and the other functions. The module is what that lambda gives, the
-    /// functions by their names, so each use of the module copies it whole.
-    Module {
-        name: String,
-        fields: Vec<String>,
-        body: Vec<Statement>,
-    },
-    /// `call Name::function(arguments) to result;`: the module is used, and that
-    /// function of it called.
-    CallOf {
-        module: String,
-        name: String,
-        arguments: Vec<Path>,
-        result: Path,
-    },
-    /// `call receiver::name(arguments) to result;`: the function of that name
-    /// that takes the receiver is called.
-    CallNamed {
-        receiver: Path,
-        name: String,
-        arguments: Vec<Path>,
-        result: Path,
-    },
-}
-
-/// A lambda as the text writes it. In its body a name is a class of the lambda:
-/// a parameter, the result, a class the lambda captures from where it is written,
-/// or a class of its own from where the body first writes it.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Lambda {
-    /// The names of the classes captured, each a name where the lambda is
-    /// written.
-    pub captures: Vec<String>,
-    pub parameters: Vec<Parameter>,
-    pub result: String,
-    /// A body declares nothing: what a declaration writes comes from outside
-    /// the text.
-    pub body: Vec<Statement>,
-}
-
-/// A parameter of a lambda: `x`, which takes what is passed as it comes, or
-/// `x: T`, to which what is passed is passed as to a declared type.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Parameter {
-    pub name: String,
-    pub ty: Option<Type>,
 }
 
 /// A class: one a name stands for, or a part of one, named by each segment in
@@ -166,19 +99,6 @@ pub enum Variant {
     Error(String),
     /// A variant of the enum of the first name.
     Enum(String, String),
-}
-
-/// What is written at the brand of a type. A brand is no type: it is made by a
-/// call, so what stands there is what it is one type with, or its number.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Brand {
-    /// `b`: a class of the program.
-    Class(Path),
-    /// `B`: a hole of the row.
-    Hole(String),
-    /// `#0`: a brand a call made, by its number in the order they are made. An
-    /// assertion alone writes one.
-    Made(usize),
 }
 
 /// A type as the text writes one. Where a class is to be given, a type gives the
@@ -218,10 +138,11 @@ pub enum Type {
     Object(BTreeMap<String, Type>),
     /// `E{V(T), W(U)}`
     Enum(String, BTreeMap<String, Type>),
-    /// `N<T, U; b>`: a type of a name that has a brand, which is written last.
-    Branded(String, Vec<Type>, Brand),
+    /// `N<T, U; b>`: a type of a name that has a brand. The class that stands at
+    /// the brand is written last.
+    Branded(String, Vec<Type>, Path),
     /// `Fn(T, U) -> R`
     Fn(Vec<Type>, Box<Type>),
-    /// `N`, `N<T, U>`: a type of a name, or, in a row, one of its holes.
+    /// `N`, `N<T, U>`: a type of a name.
     Named(String, Vec<Type>),
 }

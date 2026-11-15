@@ -10,7 +10,7 @@
 
 use std::fmt::Debug;
 
-use super::{ClassId, NameId};
+use super::ClassId;
 
 /// A constraint as a store sees it.
 ///
@@ -19,12 +19,6 @@ use super::{ClassId, NameId};
 pub trait ConstraintOf: Clone + Ord + Debug {
     fn lower(&self) -> ClassId;
     fn upper(&self) -> ClassId;
-
-    /// The same constraint, with every id it holds given by `f`, as a body made
-    /// anew needs it.
-    fn renamed<F>(self, f: F) -> Self
-    where
-        F: FnMut(ClassId) -> ClassId;
 }
 
 /// What solving records between two classes, and holds until it is finished: a
@@ -42,8 +36,8 @@ pub enum Bound {
     /// one operation `lower` may take to reach it is the reborrow. Classes
     /// that enter one another are one class.
     Enter { lower: ClassId, upper: ClassId },
-    /// `lower` is passed to `upper`: by subtyping the language gives, or else
-    /// through declared functions. It decides neither head.
+    /// `lower` is passed to `upper`, by subtyping the language gives. It decides
+    /// neither head.
     Change { lower: ClassId, upper: ClassId },
     /// The two heads are equal. It decides neither head and makes no
     /// change, so it can be judged one layer at a time.
@@ -62,10 +56,6 @@ pub enum Suspended {
     /// the body's result. What enters `upper` is told by the head of `lower`, and
     /// nothing enters it until that head is there.
     Exit { lower: ClassId, upper: ClassId },
-    /// `lower::name(ā)`: `lower` is the receiver, and `upper` the function type
-    /// `Fn(ā) → r` the call writes. Which function of that name is called is told
-    /// by the head of the receiver, and waits for it.
-    Named { lower: ClassId, upper: ClassId, name: NameId },
 }
 
 impl From<Bound> for Constraint {
@@ -81,17 +71,6 @@ impl From<Suspended> for Constraint {
 }
 
 impl ConstraintOf for Bound {
-    fn renamed<F>(self, mut f: F) -> Self
-    where
-        F: FnMut(ClassId) -> ClassId,
-    {
-        match self {
-            Bound::Enter { lower, upper } => Bound::Enter { lower: f(lower), upper: f(upper) },
-            Bound::Equal { lower, upper } => Bound::Equal { lower: f(lower), upper: f(upper) },
-            Bound::Change { lower, upper } => Bound::Change { lower: f(lower), upper: f(upper) },
-        }
-    }
-
     fn lower(&self) -> ClassId {
         match self {
             Bound::Enter { lower, .. }
@@ -110,41 +89,20 @@ impl ConstraintOf for Bound {
 }
 
 impl ConstraintOf for Suspended {
-    fn renamed<F>(self, mut f: F) -> Self
-    where
-        F: FnMut(ClassId) -> ClassId,
-    {
-        match self {
-            Suspended::Alone { lower, upper } => Suspended::Alone { lower: f(lower), upper: f(upper) },
-            Suspended::Exit { lower, upper } => Suspended::Exit { lower: f(lower), upper: f(upper) },
-            Suspended::Named { lower, upper, name } => Suspended::Named { lower: f(lower), upper: f(upper), name },
-        }
-    }
-
     fn lower(&self) -> ClassId {
         match self {
-            Suspended::Alone { lower, .. } | Suspended::Exit { lower, .. } | Suspended::Named { lower, .. } => *lower,
+            Suspended::Alone { lower, .. } | Suspended::Exit { lower, .. } => *lower,
         }
     }
 
     fn upper(&self) -> ClassId {
         match self {
-            Suspended::Alone { upper, .. } | Suspended::Exit { upper, .. } | Suspended::Named { upper, .. } => *upper,
+            Suspended::Alone { upper, .. } | Suspended::Exit { upper, .. } => *upper,
         }
     }
 }
 
 impl ConstraintOf for Constraint {
-    fn renamed<F>(self, f: F) -> Self
-    where
-        F: FnMut(ClassId) -> ClassId,
-    {
-        match self {
-            Constraint::Bound(bound) => Constraint::Bound(bound.renamed(f)),
-            Constraint::Suspended(suspended) => Constraint::Suspended(suspended.renamed(f)),
-        }
-    }
-
     fn lower(&self) -> ClassId {
         match self {
             Constraint::Bound(bound) => bound.lower(),

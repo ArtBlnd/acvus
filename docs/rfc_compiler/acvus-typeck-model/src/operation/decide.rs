@@ -8,7 +8,7 @@ use crate::store::classes::Classes;
 
 use super::Outcome;
 use super::connect::connect;
-use super::law::{Bodies, Head, Heads, Law};
+use super::law::{Head, Heads, Law};
 use super::settle::asked;
 use super::take_in::take_in;
 
@@ -30,13 +30,12 @@ where
     C: ConstraintOf,
     L: Law<C>,
     F: Fn(&Classes<C>) -> Vec<ClassId>,
-    H: Fn(&L, &Classes<C>, &Bodies<'_>, &[ClassId], &dyn Fn(ClassId) -> bool) -> Heads,
+    H: Fn(&L, &Classes<C>, &[ClassId], &dyn Fn(ClassId) -> bool) -> Heads,
 {
     let mut undecided = asked(&store.classes, visit);
     undecided.retain(|class| !store.classes.is_decided(*class));
-    let bodies = Bodies::new(&store.scopes, &store.closures, law.awaiting(store));
     let mut deciding = store.classes.deciding();
-    let Heads { heads, refused } = ask(law, deciding.classes(), &bodies, &undecided, &|class| deciding.is_held(class));
+    let Heads { heads, refused } = ask(law, deciding.classes(), &undecided, &|class| deciding.is_held(class));
     for refusal in refused {
         outcome.refuse(refusal);
     }

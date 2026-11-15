@@ -163,44 +163,6 @@ impl State {
 }
 
 impl Class {
-    /// The same class, with every id it holds given by `f`.
-    pub fn renamed<F>(self, mut f: F) -> Self
-    where
-        F: FnMut(ClassId) -> ClassId,
-    {
-        let state = match self.state {
-            State::Decided(decided) => State::Decided(Decided {
-                shape: decided.shape.map(|class| f(*class)),
-                by: decided.by,
-                origin: decided.origin,
-            }),
-            State::Undecided(undecided) => {
-                let parts = undecided
-                    .parts
-                    .into_iter()
-                    .map(|(key, part)| {
-                        let part = Part {
-                            class: f(part.class),
-                            lower: part.lower,
-                            upper: part.upper,
-                            carried: part.carried,
-                        };
-                        (key, part)
-                    })
-                    .collect();
-                State::Undecided(Undecided {
-                    parts,
-                    domains: undecided.domains,
-                })
-            }
-        };
-        Class {
-            scope: self.scope,
-            state,
-            connections: self.connections.into_iter().map(|(a, b, at)| (f(a), f(b), at)).collect(),
-        }
-    }
-
     /// Makes this class and `other` one class, held at `root`, by `at`.
     ///
     /// The class belongs to the outer of the two scopes. Two undecided

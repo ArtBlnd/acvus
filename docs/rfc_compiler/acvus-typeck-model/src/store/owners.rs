@@ -9,8 +9,8 @@
 //!
 //! What is kept is, of each undecided class, the parts it has now, each by its
 //! root. A decided class owns nothing. This knows no class but by its id:
-//! whoever holds the classes tells it when a part is named, when a class is
-//! written whole, and when two are merged, a decision being a merge.
+//! whoever holds the classes tells it when a part is named and when two are
+//! merged, a decision being a merge.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -61,7 +61,7 @@ where
 
     /// The class `owner` is written whole: it owns `parts` and nothing else,
     /// which is nothing where it is decided.
-    pub(super) fn written<P>(&mut self, owner: I, parts: P)
+    fn written<P>(&mut self, owner: I, parts: P)
     where
         P: IntoIterator<Item = I>,
     {

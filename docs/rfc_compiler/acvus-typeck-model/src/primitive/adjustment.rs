@@ -6,8 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use super::ty::Mutability;
-use super::{ItemId, Name};
+use super::ItemId;
 
 /// Subtyping the language gives: one index of a head loosened, or `!` going to
 /// any type.
@@ -33,16 +32,7 @@ pub enum Adjustment {
     /// Subtyping the language gives was taken: where an argument is passed, any
     /// of them, and where a value enters a class, the reborrow alone.
     Subtype(Subtyping),
-    /// A receiver that is no reference is lent, where the function called by
-    /// name takes a reference: `x.m()` is `(&x).m()` or `(&mut x).m()`.
-    Lend(Mutability),
-    /// A declared function is called: one for each row a value is passed through,
-    /// in the order of the chain.
-    Row(Name),
 }
 
 /// The adjustments of each item, in the order they apply.
-///
-/// Every copy of a body keeps the items of its text, so all instances of
-/// one text share an entry here, though each may take its own adjustment.
 pub type Adjustments = BTreeMap<ItemId, Vec<Adjustment>>;

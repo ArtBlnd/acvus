@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::ty::{Mutability, Scalar};
 
-use super::ast::{Assertion, Brand, Lambda, Op, Path, Program, Segment, Statement, Type, Variant};
+use super::ast::{Assertion, Op, Path, Program, Segment, Statement, Type, Variant};
 
 /// `items`, each written by `write`, with `, ` between them.
 fn separated<I, T, F>(f: &mut Formatter<'_>, items: I, mut write: F) -> fmt::Result
@@ -73,10 +73,7 @@ impl Display for Assertion {
                 }
                 separated(f, adjustments, |f, adjustment| match adjustment {
                     Adjustment::Deref => f.write_str("Deref"),
-                    Adjustment::Lend(Mutability::Shared) => f.write_str("Lend"),
-                    Adjustment::Lend(Mutability::Exclusive) => f.write_str("LendMut"),
                     Adjustment::Subtype(subtyping) => write!(f, "{subtyping:?}"),
-                    Adjustment::Row(name) => f.write_str(&name.0),
                 })
             }
         }
@@ -105,90 +102,12 @@ impl Display for Op {
             Op::Pass { argument, given } => write!(f, "pass {argument} to {given}"),
             Op::Exit { exits_with, error } => write!(f, "exit {exits_with} to {error}"),
             Op::Declare { name, ty } => write!(f, "declare {name} = {ty}"),
-            Op::Row {
-                name,
-                holes,
-                parameters,
-                result,
-            } => {
-                write!(f, "row {name}")?;
-                if !holes.is_empty() {
-                    f.write_str("<")?;
-                    separated(f, holes, |f, hole| f.write_str(hole))?;
-                    f.write_str(">")?;
-                }
-                f.write_str(":")?;
-                for (index, parameter) in parameters.iter().enumerate() {
-                    write!(f, "{}{parameter}", if index == 0 { " " } else { ", " })?;
-                }
-                write!(f, " -> {result}")
-            }
-            Op::Module { name, fields, body } => {
-                write!(f, "module {name} [")?;
-                separated(f, fields, |f, field| f.write_str(field))?;
-                f.write_str("] {")?;
-                for statement in body {
-                    write!(f, " {statement}")?;
-                }
-                f.write_str(" }")
-            }
-            Op::CallOf {
-                module,
-                name,
-                arguments,
-                result,
-            } => {
-                write!(f, "call {module}::{name}(")?;
-                separated(f, arguments, |f, argument| write!(f, "{argument}"))?;
-                write!(f, ") to {result}")
-            }
             Op::Struct { name, fields } => {
                 write!(f, "struct {name} {{")?;
                 separated(f, fields, |f, field| f.write_str(field))?;
                 f.write_str("}")
             }
-            Op::Define { upper, lambda } => write!(f, "{upper} <- {lambda}"),
-            Op::CallNamed {
-                receiver,
-                name,
-                arguments,
-                result,
-            } => {
-                write!(f, "call {receiver}::{name}(")?;
-                separated(f, arguments, |f, argument| write!(f, "{argument}"))?;
-                write!(f, ") to {result}")
-            }
-            Op::Call {
-                callee,
-                arguments,
-                result,
-            } => {
-                write!(f, "call {callee}(")?;
-                separated(f, arguments, |f, argument| write!(f, "{argument}"))?;
-                write!(f, ") to {result}")
-            }
         }
-    }
-}
-
-impl Display for Lambda {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str("fn ")?;
-        if !self.captures.is_empty() {
-            f.write_str("[")?;
-            separated(f, &self.captures, |f, capture| f.write_str(capture))?;
-            f.write_str("] ")?;
-        }
-        f.write_str("(")?;
-        separated(f, &self.parameters, |f, parameter| match &parameter.ty {
-            Some(ty) => write!(f, "{}: {ty}", parameter.name),
-            None => f.write_str(&parameter.name),
-        })?;
-        write!(f, ") -> {} {{", self.result)?;
-        for statement in &self.body {
-            write!(f, " {statement}")?;
-        }
-        f.write_str(" }")
     }
 }
 
@@ -234,16 +153,6 @@ pub(super) fn scalar(scalar: Scalar) -> &'static str {
         Scalar::F64 => "f64",
         Scalar::Bool => "bool",
         Scalar::Char => "char",
-    }
-}
-
-impl Display for Brand {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Brand::Class(path) => write!(f, "{path}"),
-            Brand::Hole(hole) => f.write_str(hole),
-            Brand::Made(number) => write!(f, "#{number}"),
-        }
     }
 }
 

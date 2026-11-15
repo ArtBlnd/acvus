@@ -12,22 +12,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::operation::Outcome;
 use crate::operation::language::Language;
-use crate::operation::language::functions::Functions;
-use crate::operation::language::units::Units;
 use crate::operation::solve::solve;
 use crate::primitive::class::{Origin, Side, State};
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::domain::Domain;
-use crate::primitive::id::{Arena, Id};
+use crate::primitive::id::Arena;
 use crate::primitive::refusal::{Cause, Refused};
-use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, Ty, VariantOf};
-use crate::primitive::scope::Scopes;
-use crate::primitive::{ClassId, ClosureId, ItemId, Name, ScopeId};
+use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, VariantOf};
+use crate::primitive::{ClassId, ItemId, Name, ScopeId};
 use crate::store::Store;
 use crate::store::classes::Classes;
-use crate::store::closures::{Closure, Closures, Copy};
 
-use super::ast::{self, Assertion, Brand, Op, Path, Program, Segment, Statement, Type, Variant};
+use super::ast::{Assertion, Op, Path, Program, Segment, Type, Variant};
 use super::print;
 
 /// A program recorded, and then solved.
@@ -44,8 +40,7 @@ pub struct Recorded {
 
 /// The items of a text, each with what it is found by: the label of its
 /// statement, or the statement's number where it has none, and for a projection
-/// that and the path it names, as `first:r.x`. A statement of a body is numbered
-/// within the statement that writes the lambda, as `3.1`.
+/// that and the path it names, as `first:r.x`.
 #[derive(Debug, Default)]
 struct Items {
     found_by: Arena<ItemId, String>,
@@ -60,13 +55,10 @@ impl Items {
     }
 }
 
-/// Statements being written into a scope of the store: those of the program,
-/// or those of the body of a lambda, which lies in a scope of its own within
-/// the scope the lambda is written in. The two are written the same way.
+/// The statements of a program being written into the store.
 struct Writer<'a> {
     classes: &'a mut Classes<Constraint>,
-    scopes: &'a mut Scopes,
-    closures: &'a mut Closures,
+    /// The scope the program is written in.
     scope: ScopeId,
     /// The class each name stands for: the one it was first written as.
     names: &'a mut BTreeMap<String, ClassId>,
@@ -75,35 +67,6 @@ struct Writer<'a> {
     /// Each part named on a class decided as a head with no place for it.
     not_held: &'a mut Vec<Refused>,
     items: &'a mut Items,
-    functions: &'a mut Functions,
-    units: &'a mut Units,
-}
-
-/// The name of what the lambda of a module gives: its functions, by their names.
-const MODULE: &str = "module";
-
-/// The modules the statements `body` use, at any depth: each is a class of where
-/// the program is written, which a lambda that uses it captures.
-fn modules_used(body: &[Statement]) -> BTreeSet<String> {
-    let mut used = BTreeSet::new();
-    for statement in body {
-        match &statement.op {
-            Op::CallOf { module, .. } => {
-                used.insert(module.clone());
-            }
-            Op::Define { lambda, .. } => used.extend(modules_used(&lambda.body)),
-            Op::Module { body, .. } => used.extend(modules_used(body)),
-            Op::Enter { .. }
-            | Op::Pass { .. }
-            | Op::Exit { .. }
-            | Op::Declare { .. }
-            | Op::Row { .. }
-            | Op::Struct { .. }
-            | Op::Call { .. }
-            | Op::CallNamed { .. } => {}
-        }
-    }
-    used
 }
 
 impl Writer<'_> {
@@ -156,245 +119,38 @@ impl Writer<'_> {
     }
 
     /// The class that has the type `ty`, written by `origin`, by `item`.
-    fn class_of(&mut self, ty: &Type, origin: Origin, item: ItemId, label: &str) -> Result<ClassId, String> {
+    fn class_of(&mut self, ty: &Type, origin: Origin, item: ItemId, label: &str) -> ClassId {
         let literal = |writer: &mut Self, scalars: &[Scalar]| {
             let class = writer.undecided();
             let pending = writer.classes.domain(class, Domain(scalars.iter().copied().collect()), item);
             debug_assert_eq!(pending, None, "a class just made is undecided");
             class
         };
-        let part = |writer: &mut Self, part: &Type| writer.class_of(part, origin, item, label);
         let shape = match ty {
-            Type::Class(path) => return Ok(self.path(path, Side::Upper, label)),
-            Type::Integer => return Ok(literal(self, &INTEGERS)),
-            Type::Float => return Ok(literal(self, &[Scalar::F32, Scalar::F64])),
+            Type::Class(path) => return self.path(path, Side::Upper, label),
+            Type::Integer => return literal(self, &INTEGERS),
+            Type::Float => return literal(self, &[Scalar::F32, Scalar::F64]),
             Type::Branded(name, arguments, brand) => {
-                let arguments = arguments.iter().map(|argument| part(self, argument)).collect::<Result<_, _>>()?;
-                Shape::Extern(Name::new(name), arguments, self.at_a_brand(brand, label)?)
+                let arguments = arguments.iter().map(|argument| self.class_of(argument, origin, item, label)).collect();
+                Shape::Extern(Name::new(name), arguments, self.path(brand, Side::Upper, label))
             }
-            written => shape(written).try_map(|of| part(self, of))?,
+            written => shape(written).map(|of| self.class_of(of, origin, item, label)),
         };
         let by = BTreeSet::from([item]);
-        Ok(match origin {
+        match origin {
             Origin::Free => self.classes.decided(self.scope, shape, by),
             Origin::External => self.classes.external(self.scope, shape, by),
-        })
-    }
-
-    /// The class that stands at a brand the program writes: a class of the
-    /// program, which is one type with the brand a call makes.
-    fn at_a_brand(&mut self, brand: &Brand, label: &str) -> Result<ClassId, String> {
-        match brand {
-            Brand::Class(path) => Ok(self.path(path, Side::Upper, label)),
-            Brand::Hole(hole) => Err(format!("`{hole}` is written at a brand, and a program has no hole")),
-            Brand::Made(_) => Err(A_BRAND_IS_WRITTEN.to_owned()),
         }
     }
 
-    /// `callee(arguments)`, giving `result`: the callee is passed to the function
-    /// type the call writes.
-    fn call(&mut self, callee: ClassId, arguments: Vec<ClassId>, result: ClassId, item: ItemId) {
-        let written = self.classes.decided(self.scope, Shape::Fn(arguments, result), BTreeSet::from([item]));
-        self.classes.constrain(
-            Bound::Change {
-                lower: callee,
-                upper: written,
-            }
-            .into(),
-            item,
-        );
-    }
-
-    /// Writes the body of `lambda` in a scope of its own within this one, by
-    /// `item`, and gives the closure named of it.
-    ///
-    /// A name the lambda captures is the class it stands for here. The name of a
-    /// parameter is a variable of the body. A parameter that writes no type is
-    /// that variable, a hole. One that writes a type is the class a declaration
-    /// writes, which what is passed is passed to, and which enters the variable,
-    /// as a declared value enters what it is assigned to.
-    ///
-    /// The body is said to be a copy of its own closure, so a call within it of
-    /// that closure is a call of the body itself.
-    fn lambda(&mut self, lambda: &ast::Lambda, item: ItemId, label: &str) -> Result<ClosureId, String> {
-        let scope = self.scopes.child(self.scope);
-        let mut names = BTreeMap::new();
-        let mut name_once = |name: &String, class: ClassId| match names.insert(name.clone(), class) {
-            Some(_) => Err(format!("`{name}` is named twice among what a lambda captures, takes and gives")),
-            None => Ok(()),
-        };
-        // A module the body uses is captured, as what it names is written where
-        // the program is.
-        let implicit = modules_used(&lambda.body).into_iter().filter(|module| !lambda.captures.contains(module));
-        let captured: Vec<String> = lambda.captures.iter().cloned().chain(implicit).collect();
-        for name in &captured {
-            let class = self.named(name);
-            name_once(name, class)?;
-        }
-        let mut variables = Vec::new();
-        for parameter in &lambda.parameters {
-            let variable = self.classes.undecided(scope);
-            name_once(&parameter.name, variable)?;
-            variables.push(variable);
-        }
-        let result = self.classes.undecided(scope);
-        name_once(&lambda.result, result)?;
-
-        let mut body = Writer {
-            classes: &mut *self.classes,
-            scopes: &mut *self.scopes,
-            closures: &mut *self.closures,
-            scope,
-            names: &mut names,
-            made: &mut *self.made,
-            not_held: &mut *self.not_held,
-            items: &mut *self.items,
-            functions: &mut *self.functions,
-            units: &mut *self.units,
-        };
-        let mut parameters = Vec::new();
-        for (parameter, variable) in lambda.parameters.iter().zip(variables) {
-            let Some(ty) = &parameter.ty else {
-                parameters.push(variable);
-                continue;
-            };
-            let declared = body.class_of(ty, Origin::External, item, label)?;
-            body.classes.constrain(
-                Bound::Enter {
-                    lower: declared,
-                    upper: variable,
-                }
-                .into(),
-                item,
-            );
-            parameters.push(declared);
-        }
-        for (index, statement) in lambda.body.iter().enumerate() {
-            let label = statement.label.clone().unwrap_or_else(|| format!("{label}.{}", index + 1));
-            body.statement(&statement.op, &label)?;
-        }
-
-        let closure = self.closures.name(Closure {
-            body: scope,
-            parameters: parameters.clone(),
-            result,
-            makes: BTreeSet::new(),
-        });
-        self.closures.copied(scope, Copy { closure, parameters, result });
-        Ok(closure)
-    }
-
-    /// Writes `upper <- lambda`, and gives the closure named of the lambda: the
-    /// function value of that closure enters `upper`.
-    fn defined(&mut self, upper: &Path, lambda: &ast::Lambda, label: &str) -> Result<ClosureId, String> {
-        let item = self.items.item(label.to_owned());
-        let closure = self.lambda(lambda, item, label)?;
-        let value = self.classes.decided(self.scope, Shape::FnValue(BTreeSet::from([closure])), BTreeSet::from([item]));
-        let upper = self.path(upper, Side::Lower, label);
-        self.classes.constrain(Bound::Enter { lower: value, upper }.into(), item);
-        Ok(closure)
-    }
-
-    /// Writes the module `name`, of the fields `fields`, whose body is `body`: a
-    /// lambda that takes nothing and gives its functions by their names. A
-    /// function is a lambda the body assigns to a name, and it captures each field
-    /// and each function it does not name otherwise. A function whose first
-    /// parameter writes a type is told to the table of functions, to be called
-    /// by name on a receiver.
-    fn module(&mut self, name: &str, fields: &[String], body: &[Statement], label: &str) -> Result<(), String> {
-        let functions: Vec<&String> = body
-            .iter()
-            .filter_map(|statement| match &statement.op {
-                Op::Define { upper, .. } if upper.segments.is_empty() => Some(&upper.root),
-                _ => None,
-            })
-            .collect();
-        let mut statements = Vec::new();
-        for statement in body {
-            let op = match &statement.op {
-                Op::Define { upper, lambda } if upper.segments.is_empty() => {
-                    let mut lambda = lambda.clone();
-                    for shared in fields.iter().chain(functions.iter().copied()) {
-                        let named = lambda.captures.contains(shared)
-                            || lambda.parameters.iter().any(|parameter| parameter.name == *shared)
-                            || lambda.result == *shared;
-                        if !named {
-                            lambda.captures.push(shared.clone());
-                        }
-                    }
-                    Op::Define {
-                        upper: upper.clone(),
-                        lambda,
-                    }
-                }
-                other => other.clone(),
-            };
-            statements.push(Statement {
-                label: statement.label.clone(),
-                op,
-            });
-        }
-        for function in functions {
-            statements.push(Statement {
-                label: None,
-                op: Op::Enter {
-                    upper: Path {
-                        root: MODULE.to_owned(),
-                        segments: vec![Segment::Field(function.clone())],
-                    },
-                    lower: Type::Class(Path {
-                        root: function.clone(),
-                        segments: Vec::new(),
-                    }),
-                    alone: false,
-                },
-            });
-        }
-        let whole = ast::Lambda {
-            captures: Vec::new(),
-            parameters: Vec::new(),
-            result: MODULE.to_owned(),
-            body: statements,
-        };
-        let upper = Path {
-            root: name.to_owned(),
-            segments: Vec::new(),
-        };
-        let module = self.defined(&upper, &whole, label)?;
-
-        // A function whose first parameter writes a type takes a receiver, and
-        // is found by a call by name. The closures of the functions are those
-        // of the bodies written directly in the module's body, in the order its
-        // statements define them.
-        let body = self.closures.get(module).body;
-        let functions: Vec<(ClosureId, ClassId)> = self
-            .closures
-            .iter()
-            .filter(|(_, closure)| self.scopes.parent(closure.body) == Some(body))
-            .filter_map(|(id, closure)| Some((id, *closure.parameters.first()?)))
-            .collect();
-        let defining = whole.body.iter().filter_map(|statement| match &statement.op {
-            Op::Define { upper, lambda } => Some((upper, lambda)),
-            _ => None,
-        });
-        let with_a_parameter = defining.filter(|(_, lambda)| !lambda.parameters.is_empty());
-        for ((upper, _), (function, first)) in with_a_parameter.zip(functions) {
-            if upper.segments.is_empty() && self.classes.is_decided(first) {
-                let name = Name::new(&upper.root);
-                let told = self.functions.told(name.clone(), function);
-                self.units.method(told, name, module);
-            }
-        }
-        Ok(())
-    }
-
-    /// Records the one operation `op` writes. A declaration is no statement of
-    /// what is solved: what it writes comes from outside the text.
-    fn statement(&mut self, op: &Op, label: &str) -> Result<(), String> {
+    /// Records the one operation `op` writes. A declaration writes nothing here:
+    /// what it writes comes from outside the text, and is recorded before any
+    /// statement ([`declare`]).
+    fn statement(&mut self, op: &Op, label: &str) {
         match op {
             Op::Enter { upper, lower, alone } => {
                 let item = self.items.item(label.to_owned());
-                let lower = self.class_of(lower, Origin::Free, item, label)?;
+                let lower = self.class_of(lower, Origin::Free, item, label);
                 let upper = self.path(upper, Side::Lower, label);
                 let constraint = if *alone {
                     Suspended::Alone { lower, upper }.into()
@@ -415,67 +171,8 @@ impl Writer<'_> {
                 let upper = self.path(error, Side::Lower, label);
                 self.classes.constrain(Suspended::Exit { lower, upper }.into(), item);
             }
-            Op::Define { upper, lambda } => {
-                self.defined(upper, lambda, label)?;
-            }
-            Op::Call {
-                callee,
-                arguments,
-                result,
-            } => {
-                let item = self.items.item(label.to_owned());
-                let callee = self.path(callee, Side::Upper, label);
-                let arguments = arguments.iter().map(|argument| self.path(argument, Side::Upper, label)).collect();
-                let result = self.path(result, Side::Lower, label);
-                self.call(callee, arguments, result, item);
-            }
-            Op::CallNamed {
-                receiver,
-                name,
-                arguments,
-                result,
-            } => {
-                let item = self.items.item(label.to_owned());
-                let receiver = self.path(receiver, Side::Upper, label);
-                let arguments = arguments.iter().map(|argument| self.path(argument, Side::Upper, label)).collect();
-                let result = self.path(result, Side::Lower, label);
-                let written = self.classes.decided(self.scope, Shape::Fn(arguments, result), BTreeSet::from([item]));
-                let name = self.functions.called(&Name::new(name));
-                self.classes.constrain(
-                    Suspended::Named {
-                        lower: receiver,
-                        upper: written,
-                        name,
-                    }
-                    .into(),
-                    item,
-                );
-            }
-            Op::CallOf {
-                module,
-                name,
-                arguments,
-                result,
-            } => {
-                let item = self.items.item(label.to_owned());
-                // The module is used: its lambda is called, and gives its
-                // functions.
-                let of = self.named(module);
-                let used = self.undecided();
-                self.call(of, Vec::new(), used, item);
-                let named = self.items.item(format!("{label}:{module}::{name}"));
-                let function = self
-                    .classes
-                    .part(used, PartKey::Field(Name::new(name)), Side::Upper, named)
-                    .expect("a class just made names any part");
-                self.made.push(function);
-                let arguments = arguments.iter().map(|argument| self.path(argument, Side::Upper, label)).collect();
-                let result = self.path(result, Side::Lower, label);
-                self.call(function, arguments, result, item);
-            }
-            Op::Declare { .. } | Op::Row { .. } | Op::Struct { .. } | Op::Module { .. } => return Err("a declaration is written where a statement is".to_owned()),
+            Op::Declare { .. } | Op::Struct { .. } => {}
         }
-        Ok(())
     }
 }
 
@@ -567,7 +264,6 @@ impl Recorded {
             Shape::Str => "str".to_owned(),
             Shape::Never => "!".to_owned(),
             Shape::Extern(name, arguments, brand) => format!("{}<{}; {}>", name.0, listed(arguments), at(brand)),
-            Shape::Brand(brand) => format!("#{}", brand.index()),
             Shape::Fn(parameters, result) => format!("Fn({}) -> {}", listed(parameters), at(result)),
             // The text writes no function value.
             other @ Shape::FnValue(_) => format!("{:?}", other.layer()),
@@ -646,9 +342,6 @@ fn key(segment: &Segment) -> PartKey {
     }
 }
 
-/// Why a program that writes a brand by its number is no program to record.
-const A_BRAND_IS_WRITTEN: &str = "a brand is written: a call makes one, and an assertion alone writes it";
-
 /// The head `ty` writes, with the types of its parts. A path and a literal write
 /// no head: each gives a class of its own.
 fn shape(ty: &Type) -> Shape<&Type> {
@@ -678,31 +371,10 @@ fn shape(ty: &Type) -> Shape<&Type> {
     }
 }
 
-/// The type a row writes: a name among `holes` is a hole. A row is a signature
-/// of its own, so it names no class of the program and holds no literal.
-fn signature(ty: &Type, holes: &[String]) -> Result<Ty, String> {
-    match ty {
-        Type::Class(path) => Err(format!("a row names the class `{path}`")),
-        Type::Integer | Type::Float => Err("a row holds a literal".to_owned()),
-        Type::Named(name, arguments) if arguments.is_empty() && holes.contains(name) => Ok(Ty::Hole(Name::new(name))),
-        Type::Branded(name, arguments, brand) => {
-            let arguments = arguments.iter().map(|argument| signature(argument, holes)).collect::<Result<_, _>>()?;
-            let brand = match brand {
-                Brand::Hole(hole) if holes.contains(hole) => Ty::Hole(Name::new(hole)),
-                Brand::Hole(hole) => return Err(format!("`{hole}` is written at a brand, and is no hole of the row")),
-                Brand::Class(path) => return Err(format!("a row names the class `{path}`")),
-                Brand::Made(_) => return Err(A_BRAND_IS_WRITTEN.to_owned()),
-            };
-            Ok(Ty::Node(Box::new(Shape::Extern(Name::new(name), arguments, brand))))
-        }
-        written => Ok(Ty::Node(Box::new(shape(written).try_map(|part| signature(part, holes))?))),
-    }
-}
-
 /// Records `program`: what its declarations write, and then each constraint in
 /// the order of its statements. It is no program to record where a name is
-/// declared twice or by a type that names it, or a row names a class or holds a
-/// literal.
+/// declared twice or by a type that names it, or a struct is declared twice or
+/// with one field twice.
 pub fn record(program: &Program) -> Result<Recorded, String> {
     let mut recorded = Recorded::new();
     let labelled: Vec<String> = program
@@ -711,48 +383,28 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
         .enumerate()
         .map(|(index, statement)| statement.label.clone().unwrap_or_else(|| (index + 1).to_string()))
         .collect();
-    let declared: BTreeSet<&String> = program
-        .statements
-        .iter()
-        .filter_map(|statement| match &statement.op {
-            Op::Module { name, .. } => Some(name),
-            _ => None,
-        })
-        .collect();
-    if let Some(unknown) = modules_used(&program.statements).iter().find(|module| !declared.contains(module)) {
-        return Err(format!("`{unknown}` is no module"));
-    }
     let Recorded {
-        store: Store { classes, scopes, closures, .. },
-        law: Language { functions, units, structs },
+        store: Store { classes, scopes },
+        law: Language { structs },
         outcome,
         items,
         names,
         made,
     } = &mut recorded;
-    let root = scopes.root();
     let mut not_held = Vec::new();
     let mut writer = Writer {
         classes,
-        scopes,
-        closures,
-        scope: root,
+        scope: scopes.root(),
         names,
         made,
         not_held: &mut not_held,
         items,
-        functions,
-        units,
     };
     for (statement, label) in program.statements.iter().zip(&labelled) {
         declare(&mut writer, structs, &statement.op, label)?;
     }
     for (statement, label) in program.statements.iter().zip(&labelled) {
-        match &statement.op {
-            Op::Declare { .. } | Op::Row { .. } | Op::Struct { .. } => {}
-            Op::Module { name, fields, body } => writer.module(name, fields, body, label)?,
-            op => writer.statement(op, label)?,
-        }
+        writer.statement(&statement.op, label);
     }
     for refused in not_held {
         outcome.refuse(refused);
@@ -760,9 +412,8 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
     Ok(recorded)
 }
 
-/// Records what a declaration writes: a class of the name it declares, a row of
-/// the table of functions, or the fields of a struct. Any other statement
-/// declares nothing.
+/// Records what a declaration writes: a class of the name it declares, or the
+/// fields of a struct. Any other statement declares nothing.
 fn declare(writer: &mut Writer<'_>, structs: &mut BTreeMap<Name, Vec<Name>>, op: &Op, label: &str) -> Result<(), String> {
     match op {
         Op::Declare { name, ty } => {
@@ -770,7 +421,7 @@ fn declare(writer: &mut Writer<'_>, structs: &mut BTreeMap<Name, Vec<Name>>, op:
                 return Err(format!("`{name}` is declared twice"));
             }
             let item = writer.items.item(label.to_owned());
-            let class = writer.class_of(ty, Origin::External, item, label)?;
+            let class = writer.class_of(ty, Origin::External, item, label);
             // Writing the type made a class of the name where the type names
             // it: a declaration writes a finite type, and none that holds
             // itself.
@@ -778,18 +429,7 @@ fn declare(writer: &mut Writer<'_>, structs: &mut BTreeMap<Name, Vec<Name>>, op:
                 return Err(format!("`{name}` is declared as a type that names it"));
             }
         }
-        Op::Row {
-            name,
-            holes,
-            parameters,
-            result,
-        } => {
-            let item = writer.items.item(label.to_owned());
-            let parameters = parameters.iter().map(|parameter| signature(parameter, holes)).collect::<Result<Vec<_>, _>>()?;
-            let result = signature(result, holes)?;
-            writer.functions.declare(writer.classes, writer.scopes, writer.closures, Name::new(name), &parameters, &result, item);
-        }
-        Op::Struct { name, fields } | Op::Module { name, fields, .. } => {
+        Op::Struct { name, fields } => {
             let named: Vec<Name> = fields.iter().map(Name::new).collect();
             if let Some(twice) = fields.iter().enumerate().find_map(|(at, field)| fields[..at].contains(field).then_some(field)) {
                 return Err(format!("the struct `{name}` has the field `{twice}` twice"));
@@ -798,7 +438,7 @@ fn declare(writer: &mut Writer<'_>, structs: &mut BTreeMap<Name, Vec<Name>>, op:
                 return Err(format!("the struct `{name}` is declared twice"));
             }
         }
-        Op::Enter { .. } | Op::Pass { .. } | Op::Exit { .. } | Op::Define { .. } | Op::Call { .. } | Op::CallNamed { .. } | Op::CallOf { .. } => {}
+        Op::Enter { .. } | Op::Pass { .. } | Op::Exit { .. } => {}
     }
     Ok(())
 }

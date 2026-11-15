@@ -3,48 +3,34 @@
 //! | The law is asked | The rule | Where |
 //! |---|---|---|
 //! | what a constraint comes to | by the relation the constraint is: entering, being equal, being passed, `as _`, the exit of `?` | [`enter`], [`equal`], [`passing`], [`alone`], [`exit`] |
-//! | which functions are called by name | a table of closures, and no rule | [`functions`] |
-//! | what a function value passed to a function type comes to | the body of each closure made anew | [`calling`] |
-//! | which bodies await a use | the body of each closure | [`Language::awaiting`] |
-//! | which function a call by name calls | the one function of that name the receiver goes to | [`naming`] |
-//! | what calling a function of a module comes to | the module used, and the function called | [`units`] |
 //! | which classes are one type by the constraints as a whole | classes that enter one another | [`enter::entering_one_another`] |
 //! | where a named part lies | read through a reference | [`Language::place`] |
 //! | what head a class may take | the rungs, in order | [`rungs`] |
 //! | what is refused at the end | a class still undecided, a class that is its own part | [`rungs::end`] |
 
 pub mod alone;
-pub mod calling;
 pub mod enter;
 pub mod equal;
 pub mod exit;
-pub mod functions;
-pub mod naming;
 pub mod passing;
 pub mod rungs;
-pub mod units;
 
 use std::collections::BTreeMap;
 
-use crate::primitive::{ClassId, ItemId, Name, ScopeId};
+use crate::primitive::{ClassId, ItemId, Name};
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::constraint::{Bound, Constraint, ConstraintOf, Suspended};
 use crate::primitive::class::State;
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::Refused;
 use crate::primitive::ty::{PartKey, Shape};
-use crate::store::Store;
 use crate::store::classes::Classes;
-use crate::store::closures::Closures;
 
-use super::law::{Bodies, Heads, Law, Looked, Pair, Place, Scribe};
+use super::law::{Heads, Law, Looked, Pair, Place, Scribe};
 
-/// The rules of the language, with the functions declared from outside, and the
-/// structs the text writes.
+/// The rules of the language, with the structs the text writes.
 #[derive(Clone, Debug, Default)]
 pub struct Language {
-    pub functions: functions::Functions,
-    pub units: units::Units,
     /// The fields of each struct, in the order it declares them: the type of the
     /// field at a place is the struct's type parameter at that place.
     pub structs: BTreeMap<Name, Vec<Name>>,
@@ -52,11 +38,8 @@ pub struct Language {
 
 impl Law<Constraint> for Language {
     fn look(&self, scribe: &mut Scribe<'_, Constraint>, constraint: &Constraint, at: ItemId) -> Looked<Constraint> {
-        let told = tell(&View::of(scribe.classes(), scribe.closures()), &self.functions, constraint, at);
+        let told = tell(&View::of(scribe.classes()), constraint, at);
         match told.then {
-            Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, constraint.lower(), at),
-            Some(Then::Calls(wanted)) => calling::take(scribe, constraint.lower(), wanted, at),
-            Some(Then::Named(received)) => naming::take(scribe, &self.functions, &self.units, received, constraint.lower(), constraint.upper(), at),
             Some(Then::Enters(shape)) => {
                 let upper = constraint.upper();
                 let scope = scribe.classes().get(scribe.classes().find(upper)).scope;
@@ -106,22 +89,16 @@ impl Law<Constraint> for Language {
         admits(head, domain)
     }
 
-    fn heads(&self, classes: &Classes<Constraint>, bodies: &Bodies<'_>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
-        rungs::heads(classes, bodies, &self.functions, asked, held)
+    fn heads(&self, classes: &Classes<Constraint>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
+        rungs::heads(classes, asked, held)
     }
 
-    fn fixpoint(&self, classes: &Classes<Constraint>, bodies: &Bodies<'_>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
-        rungs::fixpoint(classes, bodies, &self.functions, asked, held)
+    fn fixpoint(&self, classes: &Classes<Constraint>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
+        rungs::fixpoint(classes, asked, held)
     }
 
-    fn end(&self, classes: &Classes<Constraint>, bodies: &Bodies<'_>, class: ClassId) -> Vec<Refused> {
-        rungs::end(classes, bodies, &self.functions, class)
-    }
-
-    /// The body of each closure: a call gives its parameters what they lack, to
-    /// a body made anew.
-    fn awaiting(&self, store: &Store<Constraint>) -> Vec<ScopeId> {
-        store.closures.iter().map(|(_, closure)| closure.body).collect()
+    fn end(&self, classes: &Classes<Constraint>, class: ClassId) -> Vec<Refused> {
+        rungs::end(classes, class)
     }
 }
 
@@ -131,21 +108,19 @@ pub(super) fn admits<P>(head: &Shape<P>, domain: &Domain) -> bool {
     matches!(head, Shape::Scalar(scalar) if domain.0.contains(scalar))
 }
 
-/// The store as a relation reads it: its classes and the closures named of its
-/// bodies, as they are, or with heads supposed of some undecided classes, to
-/// ask what a constraint would come to if they took them.
+/// The store as a relation reads it: its classes, as they are, or with heads
+/// supposed of some undecided classes, to ask what a constraint would come to if
+/// they took them.
 #[derive(Clone, Debug)]
 pub(super) struct View<'a> {
     pub(super) classes: &'a Classes<Constraint>,
-    pub(super) closures: &'a Closures,
     supposed: BTreeMap<ClassId, Shape<ClassId>>,
 }
 
 impl<'a> View<'a> {
-    pub(super) fn of(classes: &'a Classes<Constraint>, closures: &'a Closures) -> Self {
+    pub(super) fn of(classes: &'a Classes<Constraint>) -> Self {
         Self {
             classes,
-            closures,
             supposed: BTreeMap::new(),
         }
     }
@@ -196,15 +171,8 @@ pub(super) struct Told {
 
 /// What a constraint that holds has still to make in the store.
 pub(super) enum Then {
-    /// The signatures of the one way through declared functions it goes by.
-    Way(passing::Way),
     /// A class with this head, written by the bound, which enters its upper end.
     Enters(Shape<ClassId>),
-    /// The call its lower end, a function, is used by: it is passed to this
-    /// class, a function type.
-    Calls(ClassId),
-    /// The signature of the row its receiver goes to.
-    Named(passing::Received),
 }
 
 impl Told {
@@ -218,15 +186,14 @@ impl Told {
 }
 
 /// What the constraint comes to in `view`, by the relation it is.
-pub(super) fn tell(view: &View<'_>, functions: &functions::Functions, constraint: &Constraint, at: ItemId) -> Told {
+pub(super) fn tell(view: &View<'_>, constraint: &Constraint, at: ItemId) -> Told {
     let (lower, upper) = (constraint.lower(), constraint.upper());
     match constraint {
         Constraint::Bound(Bound::Enter { .. }) => enter::look(view, lower, upper, at),
         Constraint::Bound(Bound::Equal { .. }) => equal::look(view, lower, upper, at),
-        Constraint::Bound(Bound::Change { .. }) => passing::look(view, functions, lower, upper, at),
+        Constraint::Bound(Bound::Change { .. }) => passing::look(view, lower, upper, at),
         Constraint::Suspended(Suspended::Alone { .. }) => alone::look(view, lower, upper),
         Constraint::Suspended(Suspended::Exit { .. }) => exit::look(view, lower, upper),
-        Constraint::Suspended(Suspended::Named { name, .. }) => naming::look(view, functions, *name, lower, upper, at),
     }
 }
 

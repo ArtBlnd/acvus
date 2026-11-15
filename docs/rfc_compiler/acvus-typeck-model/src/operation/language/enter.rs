@@ -61,7 +61,7 @@ pub(super) fn look(view: &View<'_>, lower: ClassId, upper: ClassId, at: ItemId) 
 pub(super) fn given(view: &View<'_>, constraint: &Constraint) -> Option<Option<Shape<ClassId>>> {
     match constraint {
         Constraint::Bound(Bound::Enter { lower, .. }) => Some(view.head(*lower).cloned()),
-        Constraint::Suspended(Suspended::Alone { .. } | Suspended::Exit { .. } | Suspended::Named { .. }) => Some(None),
+        Constraint::Suspended(Suspended::Alone { .. } | Suspended::Exit { .. }) => Some(None),
         Constraint::Bound(Bound::Equal { .. } | Bound::Change { .. }) => None,
     }
 }

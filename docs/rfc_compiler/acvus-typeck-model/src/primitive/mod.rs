@@ -12,7 +12,7 @@ pub mod refusal;
 pub mod scope;
 pub mod ty;
 
-pub use id::{BrandId, ClassId, ClosureId, ItemId, NameId, ScopeId};
+pub use id::{ClassId, ClosureId, ItemId, ScopeId};
 
 /// The name of a field, a variant, an enum, a module, an extern declaration,
 /// a hole, or a place in the text.

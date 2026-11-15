@@ -127,26 +127,6 @@ impl World {
         )
     }
 
-    /// `callee(arguments)`: the class of the expression. The callee is passed to
-    /// the function type the call writes.
-    pub(super) fn call(&mut self, callee: ClassId, arguments: &[ClassId]) -> ClassId {
-        let result = self.undecided();
-        let by = self.items.push("call");
-        let written = self
-            .store
-            .classes
-            .decided(self.store.scopes.root(), Shape::Fn(arguments.to_vec(), result), BTreeSet::from([by]));
-        self.store.classes.constrain(
-            Bound::Change {
-                lower: callee,
-                upper: written,
-            }
-            .into(),
-            by,
-        );
-        result
-    }
-
     /// `&place` or `&mut place`: the class of the expression, and the item by
     /// which the reference the text writes enters it.
     pub(super) fn lend(&mut self, place: ClassId, mutability: Mutability) -> (ClassId, ItemId) {

@@ -23,8 +23,6 @@ pub mod solve;
 mod take_in;
 
 #[cfg(test)]
-mod calls;
-#[cfg(test)]
 mod testing;
 #[cfg(test)]
 mod tests;
